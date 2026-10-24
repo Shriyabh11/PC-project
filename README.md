@@ -36,6 +36,16 @@ python3 analyze.py results.csv
 The analysis script writes `summary.csv` and plot images to the current
 directory. Pass a different benchmark CSV as the argument to analyze it.
 
+To compare every checked-in benchmark CSV and generate a cross-experiment
+report with plots:
+
+```bash
+python3 analyze_all.py
+```
+
+This writes `analysis/report.md`, an aggregated CSV, and comparison plots
+under `analysis/`.
+
 ## Benchmark data
 
 The `results*.csv` files in the repository contain checked-in benchmark
