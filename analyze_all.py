@@ -67,6 +67,18 @@ def summarize(data):
         result["seq_s_median"] / result["total_s_median"]
     )
     result["efficiency"] = result["speedup_vs_seq"] / result["threads"]
+    paper_times = result[result["method"] == "paper"].set_index(
+        ["source", "z", "threads"]
+    )["total_s_median"]
+    result["vs_paper_%"] = [
+        100 * (paper_times[key] - runtime) / paper_times[key]
+        if key in paper_times.index
+        else float("nan")
+        for key, runtime in zip(
+            zip(result["source"], result["z"], result["threads"]),
+            result["total_s_median"],
+        )
+    ]
     return result
 
 
@@ -306,6 +318,67 @@ def save_threshold_plot(summary):
     plt.close(fig)
 
 
+def save_paper_comparison_plot(summary):
+    comparable = summary[
+        summary["source"].isin(
+            ["results", "results_probeheavy", "results_expand_rz05", "results_expand_rz075"]
+        )
+        & (summary["threads"] == summary.groupby("source")["threads"].transform("max"))
+        & summary["method"].isin(["static", "adaptive1", "adaptive2"])
+    ].copy()
+    if comparable.empty:
+        return
+
+    sources = [
+        "results",
+        "results_probeheavy",
+        "results_expand_rz05",
+        "results_expand_rz075",
+    ]
+    titles = {
+        "results": "Baseline",
+        "results_probeheavy": "Probe-heavy",
+        "results_expand_rz05": "Many-to-many R z=0.5",
+        "results_expand_rz075": "Many-to-many R z=0.75",
+    }
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4))
+    baseline = comparable[comparable["source"] == "results"]
+    for method, group in baseline.groupby("method"):
+        group = group.sort_values("z")
+        axes[0].plot(
+            group["z"].to_numpy(),
+            group["vs_paper_%"].to_numpy(),
+            marker="o",
+            label=method,
+        )
+    axes[0].axhline(0, color="black", linewidth=0.8)
+    axes[0].set_title("Baseline by S-side skew (4 threads)")
+    axes[0].set_xlabel("Zipf skew z")
+    axes[0].set_ylabel("Faster than paper-style baseline (%)")
+    axes[0].grid(alpha=0.25)
+    axes[0].legend()
+
+    scenario = comparable[comparable["source"].isin(sources)]
+    averages = (
+        scenario.groupby(["source", "method"])["vs_paper_%"]
+        .mean()
+        .unstack("method")
+        .reindex(sources)
+    )
+    averages.plot(kind="bar", ax=axes[1])
+    axes[1].axhline(0, color="black", linewidth=0.8)
+    axes[1].set_title("Mean change vs paper-style baseline")
+    axes[1].set_xlabel("")
+    axes[1].set_ylabel("Average across tested skews (%)")
+    axes[1].set_xticklabels([titles[source] for source in sources], rotation=25, ha="right")
+    axes[1].grid(axis="y", alpha=0.25)
+    axes[1].legend(title="Method")
+    fig.suptitle("Direct comparison with the implemented paper-style scheduler")
+    fig.tight_layout()
+    fig.savefig(OUTPUT / "comparison_to_paper_baseline.png", dpi=160)
+    plt.close(fig)
+
+
 def build_report(data, summary, paths):
     lines = [
         "# Benchmark results analysis",
@@ -358,6 +431,50 @@ def build_report(data, summary, paths):
             ]
         )
 
+    lines.extend(
+        [
+            "",
+            "## Comparison with the paper-style scheduler",
+            "",
+            "Here, **paper** means the paper-style scheduler implementation in this "
+            "benchmark (`paper` rows), not independently measured results from "
+            "the published research paper. Positive percentages mean the method "
+            "was faster; negative percentages mean it was slower. Values below "
+            "average over tested skew values at the maximum thread count for "
+            "each workload.",
+            "",
+            "| Workload | Threads | Static vs paper | Adaptive1 vs paper | Adaptive2 vs paper |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for source, label in [
+        ("results", "Baseline"),
+        ("results_probeheavy", "Probe-heavy"),
+        ("results_expand_rz05", "Many-to-many, R z=0.5"),
+        ("results_expand_rz075", "Many-to-many, R z=0.75"),
+    ]:
+        rows = summary[summary["source"] == source]
+        if rows.empty or "paper" not in set(rows["method"]):
+            continue
+        thread_count = rows["threads"].max()
+        rows = rows[rows["threads"] == thread_count]
+        deltas = rows.groupby("method")["vs_paper_%"].mean()
+        cells = []
+        for method in ["static", "adaptive1", "adaptive2"]:
+            value = deltas.get(method, float("nan"))
+            cells.append(f"{value:+.2f}%" if pd.notna(value) else "n/a")
+        lines.append(
+            f"| {label} | {thread_count:g} | {cells[0]} | {cells[1]} | {cells[2]} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "The adaptive methods do not win uniformly: use the scenario-specific "
+            "results rather than treating one average as a universal ranking.",
+        ]
+    )
+
     lines.extend(["", "## Scenario comparisons", ""])
     scenario_specs = [
         ("results_probeheavy", "Probe-heavy (S is 4x R)"),
@@ -393,6 +510,7 @@ def build_report(data, summary, paths):
             "- [Baseline runtime by thread count](baseline_runtime_by_threads.png)",
             "- [Baseline speedup and imbalance](baseline_speedup_and_imbalance.png)",
             "- [Baseline scheduler diagnostics](baseline_scheduler_diagnostics.png)",
+            "- [Direct comparison to paper-style baseline](comparison_to_paper_baseline.png)",
             "- [Baseline phase breakdown](baseline_phase_breakdown.png)",
             "- [Probe-heavy workload](probe_heavy_comparison.png)",
             "- [Many-to-many workload](many_to_many_runtime.png)",
@@ -431,6 +549,7 @@ def main():
     save_expansion_plot(summary)
     save_ablation_plot(summary)
     save_threshold_plot(summary)
+    save_paper_comparison_plot(summary)
     build_report(data, summary, paths)
 
     print(f"Analyzed {len(paths)} CSV files and {len(data)} measured rows.")
