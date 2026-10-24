@@ -1,0 +1,19 @@
+# Build output
+/hashjoin
+*.o
+
+# Python environment and cache
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated analysis output
+/summary.csv
+/speedup.png
+/lambda.png
+/probe_time.png
+/total_time.png
+/phases.png
+
+# Machine-specific editor configuration
+/.vscode/
