@@ -18,11 +18,11 @@ At four threads, the fastest measured method at each skew was:
 
 Across the measured baseline skew values, average total-time change versus static at four threads (positive is faster): paper: +1.10%; adaptive1: +0.95%; adaptive2: +1.05%.
 
-## Comparison with the paper-style scheduler
+## Comparison with the paper-inspired scheduler
 
-Here, **paper** means the paper-style scheduler implementation in this benchmark (`paper` rows), not independently measured results from the published research paper. Positive percentages mean the method was faster; negative percentages mean it was slower. Values below average over tested skew values at the maximum thread count for each workload.
+Here, **paper-inspired** means this benchmark's fixed-chunk scheduler (`paper` rows): partitions larger than twice the average are split into 16,384-tuple chunks and dynamically claimed. This approximates the fine-grained task decomposition in Section VI-E/Figure 16; it is not an exact reproduction of the paper's implementation or experiment, nor the paper's reported result. Positive percentages mean the method was faster; negative percentages mean it was slower. Values below average over tested skew values at the maximum thread count for each workload.
 
-| Workload | Threads | Static vs paper | Adaptive1 vs paper | Adaptive2 vs paper |
+| Workload | Threads | Static vs paper-inspired | Adaptive1 vs paper-inspired | Adaptive2 vs paper-inspired |
 |---|---:|---:|---:|---:|
 | Baseline | 4 | -1.15% | -0.17% | -0.06% |
 | Probe-heavy | 4 | -1.82% | +0.35% | +0.08% |
@@ -30,6 +30,14 @@ Here, **paper** means the paper-style scheduler implementation in this benchmark
 | Many-to-many, R z=0.75 | 4 | -23.06% | +0.92% | -0.89% |
 
 The adaptive methods do not win uniformly: use the scenario-specific results rather than treating one average as a universal ranking.
+
+## Comparison with the published base paper
+
+The supplied paper, *Main-memory hash joins on multi-core CPUs: Tuning to the underlying hardware* (Section VI-E, Figure 16, PDF page 10), reports that fine-grained decomposition of oversized radix-join partitions improved join throughput by about 25% for Zipf z=1.5 on eight threads. The experiment used Workload A (R=16 x 2^20 tuples, S=256 x 2^20 tuples; 256 MiB and 4096 MiB) on an Intel Xeon L5520 Nehalem system.
+
+Our closest test is the baseline CSV at z=1.5 with four threads (5 million tuples on each side). Compared with our static whole-partition scheduler, the paper-inspired fixed-chunk scheduler reduced median probe time by **37.54%** and median end-to-end time by **4.44%**.
+
+These results show the same qualitative benefit under skew, but they do **not** reproduce or directly validate the paper's 25% throughput result: the hardware, thread count, relation sizes, and measured quantity differ. In particular, partitioning and build time remain in our end-to-end total and are outside the probe scheduler change.
 
 ## Scenario comparisons
 
@@ -42,7 +50,8 @@ The adaptive methods do not win uniformly: use the scenario-specific results rat
 - [Baseline runtime by thread count](baseline_runtime_by_threads.png)
 - [Baseline speedup and imbalance](baseline_speedup_and_imbalance.png)
 - [Baseline scheduler diagnostics](baseline_scheduler_diagnostics.png)
-- [Direct comparison to paper-style baseline](comparison_to_paper_baseline.png)
+- [Comparison to paper-inspired scheduler](comparison_to_paper_style_scheduler.png)
+- [Our results alongside the published paper result](base_paper_comparison.png)
 - [Baseline phase breakdown](baseline_phase_breakdown.png)
 - [Probe-heavy workload](probe_heavy_comparison.png)
 - [Many-to-many workload](many_to_many_runtime.png)

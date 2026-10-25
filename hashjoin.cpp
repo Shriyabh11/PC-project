@@ -8,7 +8,7 @@
 //   5 build phase (one hash table per R-partition, parallel static)
 //   6 probe phase, scheduled by one of:
 //        static     : static coarse scheduling of whole partitions (baseline)
-//        paper      : fine-grained dynamic (paper style): split oversized S_i into fixed chunks,
+//        paper     : paper-inspired fine-grained scheduling of oversized S_i chunks,
 //                     threads claim tasks from one shared list
 //        adaptive1  : cost-based splitting + bounded task budget + dynamic claiming
 //        adaptive2  : adaptive1 tasks + per-worker Chase-Lev deques + cost-gated stealing
@@ -318,7 +318,7 @@ static RunStats run_queue(const vector<Task>& T, const HTs& H, const Part& S, in
   return finalize(ts, omp_get_wtime() - t0);
 }
 
-// ------------------------------------------------------------------ (b) paper-style fine-grained dynamic
+// ------------------------------------------------------------------ (b) paper-inspired fine-grained dynamic
 static vector<Task> make_paper_tasks(const Part& S, const Cfg& c) {
   vector<Task> T; double avg = (double)S.n / NP;
   for (int i = 0; i < NP; i++) {
@@ -328,7 +328,7 @@ static vector<Task> make_paper_tasks(const Part& S, const Cfg& c) {
         T.push_back({(u32)i, (u32)(S.off[i] + b), (u32)(S.off[i] + min(len, b + c.paper_chunk)), 0});
     } else T.push_back({(u32)i, S.off[i], S.off[i + 1], 0});
   }
-  return T;  // partition order, no cost information (as in the paper's decomposition)
+  return T;  // partition order, no cost information
 }
 
 // ------------------------------------------------------------------ (c) adaptive cost-aware task formation

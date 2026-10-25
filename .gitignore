@@ -17,3 +17,6 @@ __pycache__/
 
 # Machine-specific editor configuration
 /.vscode/
+
+# User-provided research paper; keep the local PDF out of the public repository
+/Main-memory_hash_joins_on_multi-core_CPUs_Tuning_to_the_underlying_hardware_base_paper.pdf

@@ -4,7 +4,9 @@ A C++20/OpenMP benchmark for parallel hash joins under uniform and Zipf-skewed
 workloads. It compares four probe-phase schedulers:
 
 - `static`: statically assigns whole partitions to threads.
-- `paper`: splits large partitions into fixed-size tasks and dynamically claims them.
+- `paper`: a paper-inspired approximation that splits large partitions into
+  fixed-size tasks and dynamically claims them. It is not an exact reproduction
+  of the base paper's implementation or hardware experiment.
 - `adaptive1`: creates cost-based tasks and dynamically claims them.
 - `adaptive2`: uses per-worker deques and cost-gated work stealing.
 
