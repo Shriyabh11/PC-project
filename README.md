@@ -115,6 +115,9 @@ python3 analyze_all.py
 `analyze.py` writes `summary.csv` and plots in the current directory.
 `analyze_all.py` reads all `results*.csv` files and writes an aggregate CSV,
 report, and comparison plots under `analysis/`.
+Both scripts also generate per-file, per-thread metric dashboards with
+total-time min-to-max spread and the scheduler comparisons; speedup and
+efficiency panels are omitted for expand workloads.
 
 ### Checked-in result files
 
@@ -168,6 +171,50 @@ Fill in these values for the machine used to generate the results:
 
 ## 9. Results
 
-See [`analysis/report.md`](analysis/report.md) and
-[`analysis/all_experiments_summary.csv`](analysis/all_experiments_summary.csv)
-for the analyzed results; `analyze_all.py` regenerates them from the CSV files.
+The following snapshot is from `results.csv` at the highest tested baseline
+skew (`z=1.5`), with four threads and 10 measured repetitions. Times and
+calibration values are medians across those repetitions. Improvement
+percentages are calculated from the raw CSV medians using the formula in the
+metrics section.
+
+| Method | End-to-end (s) | Probe (s) | Speedup | Efficiency | Total vs static | Probe vs static | Total vs paper | Probe vs paper |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `static` | 0.056829 | 0.005358 | 5.018 | 1.255 | +0.00% | +0.00% | -4.65% | -60.11% |
+| `paper` | 0.054304 | 0.003347 | 5.252 | 1.313 | +4.44% | +37.54% | +0.00% | +0.00% |
+| `adaptive1` | 0.054832 | 0.003238 | 5.201 | 1.300 | +3.51% | +39.58% | -0.97% | +3.26% |
+| `adaptive2` | 0.054380 | 0.003287 | 5.244 | 1.311 | +4.31% | +38.65% | -0.14% | +1.78% |
+
+Positive improvement means the method is faster than the named baseline.
+Speedup and efficiency use the README formulas; efficiency can exceed 1 here
+because the sequential reference is a different implementation, not a
+single-thread run of the parallel algorithm.
+
+| Method | Thread lambda | Partition imbalance | Tasks | Planning (s) | Steal attempts | Successful steals | Steal success ratio |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `static` | 1.7704 | 392.48 | 1024 | 0.000000 | 0 | 0 | N/A |
+| `paper` | 1.0015 | 392.48 | 1272 | 0.000017 | 0 | 0 | N/A |
+| `adaptive1` | 1.0000 | 392.48 | 1033 | 0.000078 | 0 | 0 | N/A |
+| `adaptive2` | 1.0730 | 392.48 | 1033 | 0.000078 | 0 | 0 | N/A |
+
+At this configuration, the count-only methods all reported **19,292,529
+matches**, and all 10 measured runs per method passed correctness. No steal
+attempts occurred in these baseline `adaptive2` runs, so the success ratio is
+not defined. In the round-robin ablation, the median for `adaptive2` was 2
+steal attempts and 2 successful steals; see `results_ablation_rr.csv` for the
+full ablation data.
+
+The baseline calibration medians shared by the four methods were
+`alpha = 6.889e-9` seconds/tuple, `beta = 2.8025e-9` seconds/tuple,
+`tau_ns = 9031` ns, and `overhead_ns = 9031` ns. The `tau_ns` and
+`overhead_ns` values are auto-calibrated for this machine and configuration.
+
+All checked-in measured rows have `correct = 1`; expand-mode correctness also
+checks the payload checksum internally. The checksum itself is not stored in
+the CSV.
+
+These values describe one baseline configuration, not every experiment or
+machine. The full report and per-configuration analysis are in
+[`analysis/report.md`](analysis/report.md) and
+[`analysis/all_experiments_summary.csv`](analysis/all_experiments_summary.csv).
+Run `python3 analyze_all.py` to regenerate the aggregate analysis from the
+result CSV files.

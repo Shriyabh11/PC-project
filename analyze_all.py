@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Aggregate every results*.csv file and generate a cross-experiment report."""
+import sys
 from pathlib import Path
 
 import matplotlib
@@ -8,24 +9,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from result_metrics import (
+    print_summary,
+    save_metric_dashboards,
+    summarize_results,
+    validate_correctness,
+)
+
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT = ROOT / "analysis"
-GROUP_COLUMNS = ["source", "z", "threads", "method", "n", "ns", "expand", "r_z"]
-MEDIAN_COLUMNS = [
-    "partition_s",
-    "build_s",
-    "probe_s",
-    "total_s",
-    "seq_s",
-    "lambda",
-    "max_avg_part",
-    "tasks",
-    "steal_attempts",
-    "steals",
-    "plan_s",
-    "tau_ns",
-]
+GROUP_COLUMNS = ["source", "z", "threads", "method"]
 
 
 def load_results():
@@ -36,12 +30,10 @@ def load_results():
     frames = []
     for path in paths:
         frame = pd.read_csv(path)
-        required = set(GROUP_COLUMNS[1:] + ["warmup", "rep", "correct"])
-        missing = sorted(required - set(frame.columns))
-        if missing:
-            raise ValueError(f"{path.name} is missing required columns: {missing}")
-        if not frame["correct"].eq(1).all():
-            raise ValueError(f"{path.name} contains benchmark rows marked incorrect")
+        try:
+            validate_correctness(frame, path.name)
+        except ValueError as error:
+            raise ValueError(str(error)) from error
         frame = frame.loc[frame["warmup"] == 0].copy()
         if frame.empty:
             raise ValueError(f"{path.name} has no measured (non-warmup) rows")
@@ -51,35 +43,7 @@ def load_results():
 
 
 def summarize(data):
-    metrics = [column for column in MEDIAN_COLUMNS if column in data.columns]
-    aggregations = {
-        f"{column}_median": (column, "median") for column in metrics
-    }
-    aggregations["total_s_sd"] = ("total_s", "std")
-    aggregations["measured_reps"] = ("rep", "nunique")
-    aggregations["correct"] = ("correct", "min")
-    result = (
-        data.groupby(GROUP_COLUMNS, dropna=False)
-        .agg(**aggregations)
-        .reset_index()
-    )
-    result["speedup_vs_seq"] = (
-        result["seq_s_median"] / result["total_s_median"]
-    )
-    result["efficiency"] = result["speedup_vs_seq"] / result["threads"]
-    paper_times = result[result["method"] == "paper"].set_index(
-        ["source", "z", "threads"]
-    )["total_s_median"]
-    result["vs_paper_style_%"] = [
-        100 * (paper_times[key] - runtime) / paper_times[key]
-        if key in paper_times.index
-        else float("nan")
-        for key, runtime in zip(
-            zip(result["source"], result["z"], result["threads"]),
-            result["total_s_median"],
-        )
-    ]
-    return result
+    return summarize_results(data, GROUP_COLUMNS)
 
 
 def line_plot(ax, data, x_column, y_column, title, ylabel):
@@ -113,7 +77,7 @@ def save_baseline_plots(summary):
             ax,
             subset,
             "z",
-            "total_s_median",
+            "total_s",
             f"End-to-end time ({thread_count} threads)",
             "Median seconds",
         )
@@ -137,7 +101,7 @@ def save_baseline_plots(summary):
         axes[1],
         subset,
         "z",
-        "lambda_median",
+        "lambda",
         f"Partition imbalance ({max_threads} threads)",
         "Median lambda (max/average partition size)",
     )
@@ -145,7 +109,7 @@ def save_baseline_plots(summary):
         axes[2],
         subset,
         "z",
-        "efficiency",
+        "parallel_efficiency",
         f"Efficiency ({max_threads} threads)",
         "Speedup / thread count",
     )
@@ -158,7 +122,7 @@ def save_baseline_plots(summary):
         axes[0],
         subset,
         "z",
-        "tasks_median",
+        "tasks",
         f"Scheduled task count ({max_threads} threads)",
         "Median tasks",
     )
@@ -166,7 +130,7 @@ def save_baseline_plots(summary):
         axes[1],
         subset,
         "z",
-        "steals_median",
+        "steals",
         f"Work-stealing activity ({max_threads} threads)",
         "Median successful steals",
     )
@@ -175,10 +139,10 @@ def save_baseline_plots(summary):
     plt.close(fig)
 
     phases = [
-        ("partition_s_median", "partition"),
+        ("partition_s", "partition"),
         ("build_s_median", "build"),
-        ("plan_s_median", "planning"),
-        ("probe_s_median", "probe"),
+        ("plan_s", "planning"),
+        ("probe_s", "probe"),
     ]
     skew_values = sorted(subset["z"].unique())
     selected_skews = [skew_values[0]]
@@ -213,8 +177,8 @@ def save_scenario_plot(summary, source, filename, title):
     if data.empty:
         return
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    line_plot(axes[0], data, "z", "total_s_median", "End-to-end time", "Median seconds")
-    line_plot(axes[1], data, "z", "probe_s_median", "Probe phase", "Median seconds")
+    line_plot(axes[0], data, "z", "total_s", "End-to-end time", "Median seconds")
+    line_plot(axes[1], data, "z", "probe_s", "Probe phase", "Median seconds")
     fig.suptitle(title)
     fig.tight_layout()
     fig.savefig(OUTPUT / filename, dpi=160)
@@ -237,7 +201,7 @@ def save_expansion_plot(summary):
             ax,
             scenario,
             "z",
-            "total_s_median",
+            "total_s",
             f"R-side skew z={scenario['r_z'].iloc[0]}",
             "Median end-to-end seconds",
         )
@@ -270,7 +234,7 @@ def save_ablation_plot(summary):
             group = group.sort_values("z")
             ax.plot(
                 group["z"].to_numpy(),
-                group["total_s_median"].to_numpy(),
+                group["total_s"].to_numpy(),
                 marker="o",
                 label=assignment,
             )
@@ -289,20 +253,20 @@ def save_threshold_plot(summary):
     data = summary[summary["source"].str.startswith("results_tau_")].copy()
     if data.empty:
         return
-    data = data.sort_values("tau_ns_median")
+    data = data.sort_values("tau_ns")
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    axes[0].plot(data["tau_ns_median"], data["total_s_median"], marker="o", label="total")
-    axes[0].plot(data["tau_ns_median"], data["probe_s_median"], marker="o", label="probe")
+    axes[0].plot(data["tau_ns"], data["total_s"], marker="o", label="total")
+    axes[0].plot(data["tau_ns"], data["probe_s"], marker="o", label="probe")
     axes[0].set_title("Runtime by configured steal threshold")
     axes[0].set_xlabel("Steal threshold (ns, log scale)")
     axes[0].set_ylabel("Median seconds")
     axes[0].set_xscale("log")
     axes[0].grid(alpha=0.25)
     axes[0].legend()
-    axes[1].plot(data["tau_ns_median"], data["steals_median"], marker="o", label="steals")
+    axes[1].plot(data["tau_ns"], data["steals"], marker="o", label="steals")
     axes[1].plot(
-        data["tau_ns_median"],
-        data["steal_attempts_median"],
+        data["tau_ns"],
+        data["steal_attempts"],
         marker="o",
         label="steal attempts",
     )
@@ -347,7 +311,7 @@ def save_paper_comparison_plot(summary):
         group = group.sort_values("z")
         axes[0].plot(
             group["z"].to_numpy(),
-            group["vs_paper_style_%"].to_numpy(),
+            group["improvement_total_vs_paper_pct"].to_numpy(),
             marker="o",
             label=method,
         )
@@ -360,7 +324,7 @@ def save_paper_comparison_plot(summary):
 
     scenario = comparable[comparable["source"].isin(sources)]
     averages = (
-        scenario.groupby(["source", "method"])["vs_paper_style_%"]
+        scenario.groupby(["source", "method"])["improvement_total_vs_paper_pct"]
         .mean()
         .unstack("method")
         .reindex(sources)
@@ -379,7 +343,7 @@ def save_paper_comparison_plot(summary):
     plt.close(fig)
 
 
-def build_report(data, summary, paths):
+def build_report(data, summary, paths, dashboards):
     lines = [
         "# Benchmark results analysis",
         "",
@@ -401,21 +365,21 @@ def build_report(data, summary, paths):
     ]
     for skew in sorted(baseline["z"].unique()):
         rows = baseline[baseline["z"] == skew]
-        best = rows.loc[rows["total_s_median"].idxmin()]
+        best = rows.loc[rows["total_s"].idxmin()]
         static = rows[rows["method"] == "static"]
         if static.empty:
             static_time = float("nan")
             change = float("nan")
         else:
-            static_time = static["total_s_median"].iloc[0]
-            change = 100 * (static_time - best["total_s_median"]) / static_time
+            static_time = static["total_s"].iloc[0]
+            change = 100 * (static_time - best["total_s"]) / static_time
         lines.append(
-            f"| {skew:g} | {best['method']} | {best['total_s_median']:.6f} "
+            f"| {skew:g} | {best['method']} | {best['total_s']:.6f} "
             f"| {static_time:.6f} | {change:+.2f}% |"
         )
 
     if not baseline.empty and "static" in set(baseline["method"]):
-        pivot = baseline.pivot(index="z", columns="method", values="total_s_median")
+        pivot = baseline.pivot(index="z", columns="method", values="total_s")
         comparisons = []
         for method in ["paper", "adaptive1", "adaptive2"]:
             if method in pivot.columns:
@@ -461,7 +425,7 @@ def build_report(data, summary, paths):
             continue
         thread_count = rows["threads"].max()
         rows = rows[rows["threads"] == thread_count]
-        deltas = rows.groupby("method")["vs_paper_style_%"].mean()
+        deltas = rows.groupby("method")["improvement_total_vs_paper_pct"].mean()
         cells = []
         for method in ["static", "adaptive1", "adaptive2"]:
             value = deltas.get(method, float("nan"))
@@ -477,6 +441,68 @@ def build_report(data, summary, paths):
             "results rather than treating one average as a universal ranking.",
         ]
     )
+
+    metric_columns = [
+        "z",
+        "threads",
+        "method",
+        "expand",
+        "total_s",
+        "total_s_min",
+        "total_s_max",
+        "probe_s",
+        "plan_s",
+        "speedup_vs_seq",
+        "parallel_efficiency",
+        "lambda",
+        "max_avg_part",
+        "tasks",
+        "steals",
+        "steal_attempts",
+        "steal_success_ratio",
+        "improvement_total_vs_static_pct",
+        "improvement_total_vs_paper_pct",
+        "improvement_probe_vs_static_pct",
+        "improvement_probe_vs_paper_pct",
+        "correct_share",
+    ]
+    lines.extend(["", "## Per-configuration metrics", ""])
+    for source in sorted(summary["source"].unique()):
+        rows = summary.loc[summary["source"] == source, metric_columns]
+        lines.extend(
+            [
+                f"### `{source}.csv`",
+                "",
+                "| " + " | ".join(metric_columns) + " |",
+                "|" + "|".join("---" for _ in metric_columns) + "|",
+            ]
+        )
+        for row in rows.itertuples(index=False, name=None):
+            cells = []
+            for value in row:
+                if pd.isna(value):
+                    cells.append("n/a")
+                elif isinstance(value, float):
+                    cells.append(f"{value:.6g}")
+                else:
+                    cells.append(str(value))
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+
+    lines.extend(["", "## Metric dashboards", ""])
+    lines.append(
+        "Each chart compares methods across skew for a single result file and "
+        "thread count. Total-time points include min-to-max repetition spread; "
+        "speedup and efficiency charts are omitted for expand workloads."
+    )
+    lines.extend(["", "| Result file | Threads | Dashboard |", "|---|---:|---|"])
+    for dashboard in dashboards:
+        name = dashboard.name[len("metrics_") : -len(".png")]
+        source, thread_count = name.rsplit("_", 1)
+        lines.append(
+            f"| `{source}.csv` | {thread_count} | "
+            f"[View chart]({dashboard.name}) |"
+        )
 
     reference = base_paper_metrics(summary)
     lines.extend(
@@ -533,15 +559,15 @@ def build_report(data, summary, paths):
         ]
         skew = scenario["z"].max()
         rows = scenario[scenario["z"] == skew]
-        best = rows.loc[rows["total_s_median"].idxmin()]
+        best = rows.loc[rows["total_s"].idxmin()]
         static = rows[rows["method"] == "static"]
         if not static.empty:
             change = 100 * (
-                static["total_s_median"].iloc[0] - best["total_s_median"]
-            ) / static["total_s_median"].iloc[0]
+                static["total_s"].iloc[0] - best["total_s"]
+            ) / static["total_s"].iloc[0]
             lines.append(
                 f"- **{label}, highest tested S-side skew z={skew:g}:** "
-                f"{best['method']} was fastest at {best['total_s_median']:.6f}s, "
+                f"{best['method']} was fastest at {best['total_s']:.6f}s, "
                 f"{change:.2f}% lower than static."
             )
 
@@ -564,7 +590,7 @@ def build_report(data, summary, paths):
             "## Interpretation notes",
             "",
             "- Results are medians of measured repetitions; warm-ups are excluded. "
-            "The companion CSV also records standard deviation for total time.",
+            "Per-configuration total-time minimum and maximum show the spread.",
             "- Comparisons are descriptive for this machine and these workloads; "
             "they are not statistical-significance tests.",
             "- The sequential reference and workload differ between experiment "
@@ -587,13 +613,13 @@ def base_paper_metrics(summary):
         return None
 
     probe_reduction = 100 * (
-        baseline.loc["static", "probe_s_median"]
-        - baseline.loc["paper", "probe_s_median"]
-    ) / baseline.loc["static", "probe_s_median"]
+        baseline.loc["static", "probe_s"]
+        - baseline.loc["paper", "probe_s"]
+    ) / baseline.loc["static", "probe_s"]
     total_reduction = 100 * (
-        baseline.loc["static", "total_s_median"]
-        - baseline.loc["paper", "total_s_median"]
-    ) / baseline.loc["static", "total_s_median"]
+        baseline.loc["static", "total_s"]
+        - baseline.loc["paper", "total_s"]
+    ) / baseline.loc["static", "total_s"]
     return probe_reduction, total_reduction
 
 
@@ -631,10 +657,17 @@ def save_base_paper_comparison(summary):
 
 
 def main():
-    OUTPUT.mkdir(exist_ok=True)
-    data, paths = load_results()
-    summary = summarize(data)
+    try:
+        OUTPUT.mkdir(exist_ok=True)
+        data, paths = load_results()
+        summary = summarize(data)
+        dashboards = save_metric_dashboards(summary, OUTPUT, "metrics")
+    except (OSError, pd.errors.ParserError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
     summary.to_csv(OUTPUT / "all_experiments_summary.csv", index=False)
+    print_summary(summary)
 
     save_baseline_plots(summary)
     save_scenario_plot(
@@ -648,12 +681,14 @@ def main():
     save_threshold_plot(summary)
     save_paper_comparison_plot(summary)
     save_base_paper_comparison(summary)
-    build_report(data, summary, paths)
+    build_report(data, summary, paths, dashboards)
 
     print(f"Analyzed {len(paths)} CSV files and {len(data)} measured rows.")
     print(f"Correctness flags: {sorted(data['correct'].unique().tolist())}")
+    print(f"Generated {len(dashboards)} per-file/thread metric dashboards.")
     print(f"Report and plots written to {OUTPUT}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
