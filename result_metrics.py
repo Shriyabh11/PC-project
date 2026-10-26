@@ -29,11 +29,23 @@ GROUP_METRICS = {
     "tau_ns": ("tau_ns", "median"),
     "overhead_ns": ("overhead_ns", "median"),
     "measured_reps": ("rep", "nunique"),
+    "split_partitions": ("split_partitions", "median"),
+    "max_chunks_per_partition": ("max_chunks_per_partition", "median"),
 }
 GROUP_METADATA = {
     "n": ("n", "first"),
     "ns": ("ns", "first"),
     "r_z": ("r_z", "first"),
+    "init": ("init", "first"),
+    "paper_factor": ("paper_factor", "first"),
+    "paper_chunk": ("paper_chunk", "first"),
+    "granularity": ("granularity", "first"),
+    "min_chunk": ("min_chunk", "first"),
+    "budget_per_thread": ("budget_per_thread", "first"),
+    "include_build": ("include_build", "first"),
+    "key_range": ("key_range", "first"),
+    "seed_r": ("seed_r", "first"),
+    "seed_s": ("seed_s", "first"),
 }
 COMPARISON_COLUMNS = {
     "static": ("improvement_total_vs_static_pct", "improvement_probe_vs_static_pct"),
@@ -55,7 +67,17 @@ def validate_correctness(data, source):
 
 def summarize_results(data, group_columns):
     required = set(group_columns + ["warmup", "rep", "expand", "correct"])
-    required.update(source for source, _ in GROUP_METRICS.values())
+    metric_aggregations = {
+        name: aggregation
+        for name, aggregation in GROUP_METRICS.items()
+        if aggregation[0] in data.columns
+    }
+    optional_metrics = {"split_partitions", "max_chunks_per_partition"}
+    required.update(
+        source
+        for name, (source, _) in GROUP_METRICS.items()
+        if name not in optional_metrics
+    )
     required.update(
         source
         for source, _ in GROUP_METADATA.values()
@@ -73,7 +95,7 @@ def summarize_results(data, group_columns):
     result = (
         measured.groupby(group_columns, dropna=False)
         .agg(
-            **GROUP_METRICS,
+            **metric_aggregations,
             **{
                 name: aggregation
                 for name, aggregation in GROUP_METADATA.items()
@@ -85,7 +107,7 @@ def summarize_results(data, group_columns):
     )
     context_columns = [column for column in group_columns if column != "method"]
     result["steal_success_ratio"] = [
-        steals / attempts if attempts else 0.0
+        steals / attempts if attempts else float("nan")
         for steals, attempts in zip(result["steals"], result["steal_attempts"])
     ]
 
@@ -124,7 +146,13 @@ def summarize_results(data, group_columns):
 def print_summary(summary):
     pd.set_option("display.width", 240)
     pd.set_option("display.max_rows", 1000)
-    print(summary.to_string(index=False, float_format=lambda value: f"{value:.6g}"))
+    print(
+        summary.to_string(
+            index=False,
+            float_format=lambda value: f"{value:.6g}",
+            na_rep="N/A",
+        )
+    )
 
 
 PLOT_METRICS = [

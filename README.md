@@ -63,18 +63,18 @@ For each workload and skew, the benchmark:
 |---|---|---|---|
 | End-to-end time | `partition_s + build_s + plan_s + probe_s` | `total_s` | Planning is charged to the method. |
 | Probe-phase time | Time spent in the scheduled probe phase. | `probe_s` | Excludes partitioning, build, and task planning. |
-| Speedup and parallel efficiency | `speedup = seq_s / total_s`; `efficiency = speedup / threads` | `seq_s`, `total_s`, `threads`; derived by analysis scripts | The sequential reference also gets faster under skew, so this speedup is confounded. It is meaningless in expand mode. |
-| Relative improvement over static and paper | `100 x (T_base - T) / T_base`, for `T` equal to `total_s` or `probe_s` and base method `static` or `paper` | `analyze.py`: `impr_over_static_%` and `impr_over_paper_%` are total-time comparisons; `probe_impr_over_static_%` is probe-time vs static. `analyze_all.py`: `vs_paper_style_%` is total-time vs paper. | Probe-time improvement vs paper is not currently emitted by either analysis script. |
+| Ratio vs sequential reference | `seq_s / total_s`; `ratio / threads` is also reported as a derived efficiency | `seq_s`, `total_s`, `threads`; derived by analysis scripts | This is a ratio against a separately implemented sequential `unordered_map` join, not conventional parallel speedup against the same algorithm at one thread. It is workload-dependent and omitted in expand mode. |
+| Relative improvement over static and paper-inspired | `100 x (T_base - T) / T_base`, for `T` equal to `total_s` or `probe_s` and base method `static` or `paper` | `improvement_total_vs_static_pct`, `improvement_probe_vs_static_pct`, `improvement_total_vs_paper_pct`, `improvement_probe_vs_paper_pct` in analysis summaries | Positive values mean lower time than the named baseline. `paper` is a fixed-chunk approximation, not the original paper implementation. |
 | Thread imbalance lambda | `max(T_i) / avg(T_i)`, where `T_i` is each thread's finish time in the probe phase | `lambda` | A value closer to 1 indicates more even thread finish times. |
 | Partition imbalance | Largest S partition / average S partition | `max_avg_part` | Computed before probing. |
-| Task and stealing statistics | Task count; planning time; steal attempts; successful steals; success ratio = `steals / steal_attempts` | `tasks`, `plan_s`, `steal_attempts`, `steals` | The success ratio is undefined when there are no attempts. |
+| Task and stealing statistics | Task count, number of split partitions, maximum chunks per partition, planning time, steal attempts, successful steals; success ratio = `steals / steal_attempts` | `tasks`, `split_partitions`, `max_chunks_per_partition`, `plan_s`, `steal_attempts`, `steals` | The success ratio is undefined when there are no attempts. Split/chunk columns are zero/one for the unsplit static baseline. |
 | Correctness | Match count equals the sequential reference on every run; expand mode also checks the payload checksum | `matches`, `correct` | The checksum is checked internally but is not written to a separate CSV column. |
 | Calibrated costs | `alpha`, `beta` in seconds per tuple; `tau_ns` and `overhead_ns` in nanoseconds | `alpha`, `beta`, `tau_ns`, `overhead_ns` | `alpha` estimates build cost and `beta` estimates probe cost; both are calibrated. The steal threshold and task overhead are calibrated by default and can be set with `--tau_ns` and `--task_overhead_ns`. |
 
-The final experiment script uses one warm-up and ten measured repetitions per
-configuration. `analyze.py` and `analyze_all.py` exclude warm-ups and aggregate
-measurements by median. Method order rotates across repetitions to reduce
-ordering bias.
+`run_final.sh` uses one warm-up and ten measured repetitions; `run_metrics.sh`
+uses one warm-up and five measured repetitions. `analyze.py` and
+`analyze_all.py` exclude warm-ups and aggregate measurements by median. Method
+order rotates across repetitions to reduce ordering bias.
 
 ## 6. Build and reproduce
 
@@ -93,7 +93,7 @@ Quick correctness smoke test:
 ./hashjoin --n 100000 --zs 0,1.5 --threads 1,2 --reps 1 --warmup 1 --out smoke.csv
 ```
 
-Run the complete experiment suite:
+Run the existing checked-in experiment suite:
 
 ```bash
 ./run_final.sh
@@ -102,6 +102,26 @@ Run the complete experiment suite:
 The script recompiles the binary, sets `OMP_PROC_BIND=close` and
 `OMP_PLACES=cores`, and regenerates every `results*.csv` file listed below.
 The script estimates 20-40 minutes for the run.
+
+To run the evaluation-metrics matrix from the accompanying slide, use:
+
+```bash
+./run_metrics.sh
+```
+
+This writes separate `results_metrics_*.csv` files for 5M- and 16M-tuple
+relations. The 5M baseline uses S-side skew values `0` through `1.75` and
+1/2/4/8 OpenMP threads; the 16M target uses skew through `1.5` and 1/2/4
+threads. Both compare four scheduler methods with one warm-up and five measured
+repetitions. It also runs an adaptive granularity sweep and a round-robin
+steal-threshold sweep on the 5M workload. Relation sizes, key range, fixed
+seeds, scheduler parameters, chunk counts, and calibrated steal thresholds
+are written to each CSV. The script records OS, CPU, memory, compiler, and
+`perf` availability/version in `metrics_environment.txt`; it does not collect
+hardware performance counters. The 16M setting means 16M tuples in **each**
+relation; confirm that this matches the intended target before running on an
+8 GB machine. Eight threads on a four-core CPU include SMT/hyper-threading.
+The script analyzes all available `results*.csv` files together.
 
 Install analysis dependencies and analyze one CSV or the whole collection:
 
@@ -138,16 +158,18 @@ regenerate these files.
 
 ## 7. Experimental setup
 
-Fill in these values for the machine used to generate the results:
+The evaluation slide specifies C++20/OpenMP, a four-core CPU with 8 GB RAM,
+Linux, 5M-tuple baseline and 16M-tuple target relations, skew through `z=1.75`,
+and thread counts 1/2/4 (plus 8 for baseline). `run_metrics.sh` turns these
+into an executable matrix; the 16M target is interpreted as 16M tuples per
+relation, and its run uses the same thread and skew sweep. Verify this
+interpretation and record the actual CPU model, core/SMT topology, RAM, Linux
+distribution, compiler version, and affinity behavior alongside any results.
+The checked-in historical CSV files were produced with different run settings
+and do not establish those machine details.
 
-- CPU model: **TODO**
-- Physical cores / logical threads: **TODO**
-- RAM: **TODO**
-- OS / WSL version: **TODO**
-- `g++ --version`: **TODO**
-- Thread affinity: `run_final.sh` sets `OMP_PROC_BIND=close` and
-  `OMP_PLACES=cores`; confirm whether this was effective on the measured
-  system: **TODO**
+The benchmark records software timings and scheduler counters in CSV. It does
+not currently invoke Linux `perf` or collect hardware performance counters.
 
 ## 8. Design decisions and limitations
 
@@ -161,9 +183,9 @@ Fill in these values for the machine used to generate the results:
 - The many-to-many workload and planning gate were added after the first
   results; they are extensions to the original count-only experiments.
 - Work stealing did not show a consistent benefit in these experiments.
-- Results come from one machine and use at most four threads. Thread counts
-  above a machine's physical core count measure hyper-threading, not the
-  intended core-scaling target.
+- Historical checked-in results use at most four threads. The optional
+  `run_metrics.sh` matrix adds eight threads; on a four-core/eight-thread
+  machine that configuration includes SMT rather than eight physical cores.
 - The `paper` method approximates the paper's fine-grained partition
   decomposition; it is not the original implementation. The published
   experiment and this benchmark use different hardware, relation sizes,
@@ -177,7 +199,7 @@ calibration values are medians across those repetitions. Improvement
 percentages are calculated from the raw CSV medians using the formula in the
 metrics section.
 
-| Method | End-to-end (s) | Probe (s) | Speedup | Efficiency | Total vs static | Probe vs static | Total vs paper | Probe vs paper |
+| Method | End-to-end (s) | Probe (s) | Ratio vs sequential | Derived ratio/thread | Total vs static | Probe vs static | Total vs paper | Probe vs paper |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `static` | 0.056829 | 0.005358 | 5.018 | 1.255 | +0.00% | +0.00% | -4.65% | -60.11% |
 | `paper` | 0.054304 | 0.003347 | 5.252 | 1.313 | +4.44% | +37.54% | +0.00% | +0.00% |
@@ -185,9 +207,9 @@ metrics section.
 | `adaptive2` | 0.054380 | 0.003287 | 5.244 | 1.311 | +4.31% | +38.65% | -0.14% | +1.78% |
 
 Positive improvement means the method is faster than the named baseline.
-Speedup and efficiency use the README formulas; efficiency can exceed 1 here
-because the sequential reference is a different implementation, not a
-single-thread run of the parallel algorithm.
+The sequential ratios use the README formulas; the derived ratio/thread can
+exceed 1 here because the sequential reference is a different implementation,
+not a single-thread run of the parallel algorithm.
 
 | Method | Thread lambda | Partition imbalance | Tasks | Planning (s) | Steal attempts | Successful steals | Steal success ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|

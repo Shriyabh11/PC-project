@@ -250,26 +250,50 @@ def save_ablation_plot(summary):
 
 
 def save_threshold_plot(summary):
-    data = summary[summary["source"].str.startswith("results_tau_")].copy()
+    new_sweep = summary["source"].str.startswith("results_metrics_tau_")
+    threshold_sweep = new_sweep if new_sweep.any() else summary[
+        "source"
+    ].str.startswith("results_tau_")
+    data = summary[threshold_sweep & (summary["method"] == "adaptive2")].copy()
     if data.empty:
         return
     data = data.sort_values("tau_ns")
     fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    axes[0].plot(data["tau_ns"], data["total_s"], marker="o", label="total")
-    axes[0].plot(data["tau_ns"], data["probe_s"], marker="o", label="probe")
+    for threads, group in data.groupby("threads"):
+        group = group.sort_values("tau_ns")
+        x = group["tau_ns"].to_numpy(dtype=float)
+        axes[0].plot(
+            x,
+            group["total_s"].to_numpy(dtype=float),
+            marker="o",
+            label=f"total, {threads:g} threads",
+        )
+        axes[0].plot(
+            x,
+            group["probe_s"].to_numpy(dtype=float),
+            marker="o",
+            linestyle="--",
+            label=f"probe, {threads:g} threads",
+        )
+        axes[1].plot(
+            x,
+            group["steals"].to_numpy(dtype=float),
+            marker="o",
+            label=f"steals, {threads:g} threads",
+        )
+        axes[1].plot(
+            x,
+            group["steal_attempts"].to_numpy(dtype=float),
+            marker="o",
+            linestyle="--",
+            label=f"attempts, {threads:g} threads",
+        )
     axes[0].set_title("Runtime by configured steal threshold")
     axes[0].set_xlabel("Steal threshold (ns, log scale)")
     axes[0].set_ylabel("Median seconds")
     axes[0].set_xscale("log")
     axes[0].grid(alpha=0.25)
     axes[0].legend()
-    axes[1].plot(data["tau_ns"], data["steals"], marker="o", label="steals")
-    axes[1].plot(
-        data["tau_ns"],
-        data["steal_attempts"],
-        marker="o",
-        label="steal attempts",
-    )
     axes[1].set_title("Work-stealing activity")
     axes[1].set_xlabel("Steal threshold (ns, log scale)")
     axes[1].set_ylabel("Median count per run")
@@ -460,11 +484,22 @@ def build_report(data, summary, paths, dashboards):
         "steals",
         "steal_attempts",
         "steal_success_ratio",
+        "split_partitions",
+        "max_chunks_per_partition",
+        "paper_chunk",
+        "granularity",
+        "tau_ns",
+        "key_range",
+        "seed_r",
+        "seed_s",
         "improvement_total_vs_static_pct",
         "improvement_total_vs_paper_pct",
         "improvement_probe_vs_static_pct",
         "improvement_probe_vs_paper_pct",
         "correct_share",
+    ]
+    metric_columns = [
+        column for column in metric_columns if column in summary.columns
     ]
     lines.extend(["", "## Per-configuration metrics", ""])
     for source in sorted(summary["source"].unique()):

@@ -331,10 +331,21 @@ static vector<Task> make_paper_tasks(const Part& S, const Cfg& c) {
   return T;  // partition order, no cost information
 }
 
+static pair<u64, u64> task_chunk_stats(const vector<Task>& tasks) {
+  vector<u64> chunks(NP, 0);
+  for (const Task& task : tasks) chunks[task.part]++;
+  u64 split_partitions = 0, max_chunks = 0;
+  for (u64 count : chunks) {
+    split_partitions += count > 1;
+    max_chunks = max(max_chunks, count);
+  }
+  return {split_partitions, max_chunks};
+}
+
 // ------------------------------------------------------------------ (c) adaptive cost-aware task formation
 // C_i = [alpha|R_i|] + beta|S_i|; split S_i into k chunks if C_i (1-1/k) > H(k), H(k) = k * task_overhead.
 static vector<Task> make_adaptive_tasks(const Part& R, const Part& S, const Cfg& c, double alpha, double beta,
-                                        double gamma, const vector<double>* est, int P, u64& nsplit) {
+                                        double gamma, const vector<double>* est, int P) {
   vector<double> C(NP); double sumC = 0;
   for (int i = 0; i < NP; i++) {
     C[i] = (c.include_build ? alpha * R.sz(i) : 0.0) + beta * S.sz(i) + (est ? gamma * (*est)[i] : 0.0); sumC += C[i];
@@ -351,10 +362,9 @@ static vector<Task> make_adaptive_tasks(const Part& R, const Part& S, const Cfg&
   }
   long B = (long)c.budget_per_thread * P;  // bounded task budget
   if (extra > B) for (int i = 0; i < NP; i++) if (k[i] > 1) k[i] = 1 + (int)((long)(k[i] - 1) * B / extra);
-  vector<Task> T; nsplit = 0;
+  vector<Task> T;
   for (int i = 0; i < NP; i++) {
     size_t len = S.sz(i); if (!len) continue;
-    if (k[i] > 1) nsplit++;
     for (int j = 0; j < k[i]; j++) {
       size_t b = len * j / k[i], e = len * (j + 1) / k[i];
       if (e > b) T.push_back({(u32)i, (u32)(S.off[i] + b), (u32)(S.off[i] + e), C[i] * (double)(e - b) / (double)len});
@@ -539,7 +549,9 @@ int main(int argc, char** argv) {
   FILE* f = fopen(c.out.c_str(), "w");
   if (!f) { perror("open output"); return 2; }
   fprintf(f, "z,threads,method,rep,warmup,n,ns,partition_s,build_s,probe_s,total_s,seq_s,matches,correct,"
-             "lambda,max_avg_part,tasks,steal_attempts,steals,alpha,beta,tau_ns,overhead_ns,plan_s,expand,r_z\n");
+             "lambda,max_avg_part,tasks,split_partitions,max_chunks_per_partition,steal_attempts,steals,"
+             "alpha,beta,tau_ns,overhead_ns,plan_s,expand,r_z,init,paper_factor,paper_chunk,"
+             "granularity,min_chunk,budget_per_thread,include_build,key_range,seed_r,seed_s\n");
   int failures = 0;
   printf("|R|=%zu |S|=%zu key_range=%u reps=%d (+%d warmup) init=%s workload=%s r_z=%.2f\n", c.n, c.ns ? c.ns : c.n, c.key_range, c.reps, c.warmup, c.init.c_str(), c.expand ? "expand" : "count", c.r_z);
 
@@ -577,11 +589,13 @@ int main(int argc, char** argv) {
         }
         // task lists are built once per rep, outside the timed probe phase (planning cost is tiny)
         a = omp_get_wtime(); vector<Task> paperT = make_paper_tasks(S, c); double plan_paper = omp_get_wtime() - a;
-        a = omp_get_wtime(); u64 nsplit = 0; vector<double> est;
+        a = omp_get_wtime(); vector<double> est;
         bool do_sample = c.expand && maxavg >= c.plan_gate;  // overhead-aware: no sampling when the data is nearly uniform
         if (do_sample) estimate_outputs(H, S, c.samples, est);
-        vector<Task> adaptT = make_adaptive_tasks(R, S, cc, alpha, beta, gamma, do_sample ? &est : nullptr, p, nsplit);
+        vector<Task> adaptT = make_adaptive_tasks(R, S, cc, alpha, beta, gamma, do_sample ? &est : nullptr, p);
         double plan_adapt = omp_get_wtime() - a;
+        auto paper_chunks = task_chunk_stats(paperT);
+        auto adaptive_chunks = task_chunk_stats(adaptT);
         for (size_t mi = 0; mi < c.methods.size(); mi++) {
           const string& m = c.methods[(mi + rep) % c.methods.size()];  // rotate order to avoid bias
           RunStats st;
@@ -593,10 +607,23 @@ int main(int argc, char** argv) {
           bool ok = st.matches == ref && (!c.expand || st.chk == refchk); if (!ok) failures++;
           double plan = (m == "static") ? 0.0 : (m == "paper" ? plan_paper : plan_adapt);  // planning is charged to the method
           double total = part_s + build_s + plan + st.probe_s;
-          fprintf(f, "%.2f,%d,%s,%d,%d,%zu,%zu,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%d,%.4f,%.2f,%llu,%llu,%llu,%.3e,%.3e,%.0f,%.0f,%.6f,%d,%.2f\n",
+          u64 split_partitions = 0, max_chunks = 1;
+          if (m == "paper") {
+            split_partitions = paper_chunks.first;
+            max_chunks = paper_chunks.second;
+          } else if (m == "adaptive1" || m == "adaptive2") {
+            split_partitions = adaptive_chunks.first;
+            max_chunks = adaptive_chunks.second;
+          }
+          fprintf(f, "%.2f,%d,%s,%d,%d,%zu,%zu,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%d,%.4f,%.2f,%llu,%llu,%llu,%llu,%llu,%.3e,%.3e,%.0f,%.0f,%.6f,%d,%.2f,%s,%.2f,%u,%.2f,%u,%d,%d,%u,%llu,%llu\n",
                   z, p, m.c_str(), rep, rep < c.warmup, c.n, S.n, part_s, build_s, st.probe_s, total, seq_s,
                   (unsigned long long)st.matches, ok, st.lambda, maxavg, (unsigned long long)st.tasks,
-                  (unsigned long long)st.steal_att, (unsigned long long)st.steals, alpha, beta, cc.tau_ns, cc.task_overhead_ns, plan, (int)c.expand, c.r_z);
+                  (unsigned long long)split_partitions, (unsigned long long)max_chunks,
+                  (unsigned long long)st.steal_att, (unsigned long long)st.steals,
+                  alpha, beta, cc.tau_ns, cc.task_overhead_ns, plan, (int)c.expand, c.r_z,
+                  c.init.c_str(), c.paper_factor, c.paper_chunk, c.granularity,
+                  c.min_chunk, c.budget_per_thread, c.include_build, c.key_range,
+                  (unsigned long long)c.seedR, (unsigned long long)c.seedS);
           printf("  p=%d rep=%d %-9s total=%.1fms probe=%.2fms lambda=%.2f tasks=%llu steals=%llu %s\n", p, rep,
                  m.c_str(), total * 1e3, st.probe_s * 1e3, st.lambda, (unsigned long long)st.tasks,
                  (unsigned long long)st.steals, ok ? "PASS" : "FAIL");
