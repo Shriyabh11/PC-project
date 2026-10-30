@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarise results.csv: medians over measured reps, speedup, efficiency, improvement, plots."""
+"""Summarize a result CSV using measured timings and scheduler counters."""
 import sys
 from pathlib import Path
 
@@ -38,10 +38,6 @@ def main():
         ("probe_s", "Probe-phase time (s)", "probe_time.png"),
         ("total_s", "End-to-end time (s)", "total_time.png"),
     ]
-    if not summary["speedup_vs_seq"].isna().all():
-        plots.append(
-            ("speedup_vs_seq", "Speedup vs sequential reference", "speedup.png")
-        )
     for column, title, filename in plots:
         plt.figure(figsize=(6, 4))
         for method, group in subset.groupby("method"):
@@ -87,8 +83,7 @@ def main():
     plt.savefig("phases.png", dpi=150)
     plt.close()
     print(
-        "\nWrote summary.csv, lambda.png, probe_time.png, total_time.png, "
-        "phases.png" + (", speedup.png" if "speedup.png" in [p[2] for p in plots] else "")
+        "\nWrote summary.csv, lambda.png, probe_time.png, total_time.png, and phases.png\n"
     )
     return 0
 

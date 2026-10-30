@@ -14,6 +14,9 @@ __pycache__/
 /probe_time.png
 /total_time.png
 /phases.png
+/metrics_*.png
+/smoke.csv
+/test_*.csv
 
 # Machine-specific editor configuration
 /.vscode/

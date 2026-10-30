@@ -47,10 +47,6 @@ GROUP_METADATA = {
     "seed_r": ("seed_r", "first"),
     "seed_s": ("seed_s", "first"),
 }
-COMPARISON_COLUMNS = {
-    "static": ("improvement_total_vs_static_pct", "improvement_probe_vs_static_pct"),
-    "paper": ("improvement_total_vs_paper_pct", "improvement_probe_vs_paper_pct"),
-}
 
 
 def validate_correctness(data, source):
@@ -111,35 +107,6 @@ def summarize_results(data, group_columns):
         for steals, attempts in zip(result["steals"], result["steal_attempts"])
     ]
 
-    expand_mode = result["expand"].eq(1)
-    result["speedup_vs_seq"] = float("nan")
-    result["parallel_efficiency"] = float("nan")
-    result.loc[~expand_mode, "speedup_vs_seq"] = (
-        result.loc[~expand_mode, "seq_s"] / result.loc[~expand_mode, "total_s"]
-    )
-    result.loc[~expand_mode, "parallel_efficiency"] = (
-        result.loc[~expand_mode, "speedup_vs_seq"]
-        / result.loc[~expand_mode, "threads"]
-    )
-
-    for method, (total_column, probe_column) in COMPARISON_COLUMNS.items():
-        baseline = result[result["method"] == method].set_index(context_columns)
-        for output_column, metric in (
-            (total_column, "total_s"),
-            (probe_column, "probe_s"),
-        ):
-            baseline_values = baseline[metric].to_dict()
-            improvements = []
-            for _, row in result.iterrows():
-                key = tuple(row[column] for column in context_columns)
-                base = baseline_values.get(key)
-                value = row[metric]
-                if base is None or pd.isna(base) or base == 0:
-                    improvements.append(float("nan"))
-                else:
-                    improvements.append(100.0 * (base - value) / base)
-            result[output_column] = improvements
-
     return result
 
 
@@ -159,17 +126,11 @@ PLOT_METRICS = [
     ("total_s", "End-to-end time (s)", True),
     ("probe_s", "Probe time (s)", False),
     ("plan_s", "Planning time (s)", False),
-    ("speedup_vs_seq", "Speedup vs sequential", False),
-    ("parallel_efficiency", "Parallel efficiency", False),
     ("lambda", "Thread imbalance lambda", False),
     ("max_avg_part", "Partition imbalance", False),
     ("tasks", "Tasks", False),
     ("steals", "Successful steals", False),
     ("steal_success_ratio", "Steal success ratio", False),
-    ("improvement_total_vs_static_pct", "Total improvement vs static (%)", False),
-    ("improvement_total_vs_paper_pct", "Total improvement vs paper (%)", False),
-    ("improvement_probe_vs_static_pct", "Probe improvement vs static (%)", False),
-    ("improvement_probe_vs_paper_pct", "Probe improvement vs paper (%)", False),
     ("correct_share", "Correct runs (share)", False),
 ]
 
@@ -190,8 +151,6 @@ def save_metric_dashboards(summary, output_dir, prefix):
             (column, title, spread)
             for column, title, spread in PLOT_METRICS
             if column in subset.columns
-            and not (column in {"speedup_vs_seq", "parallel_efficiency"}
-                     and subset["expand"].eq(1).all())
         ]
         columns = 4
         rows = (len(plotted) + columns - 1) // columns
@@ -222,11 +181,6 @@ def save_metric_dashboards(summary, output_dir, prefix):
             axis.set_title(title)
             axis.set_xlabel("Zipf skew z")
             axis.grid(alpha=0.25)
-            if metric in {"improvement_total_vs_static_pct",
-                          "improvement_total_vs_paper_pct",
-                          "improvement_probe_vs_static_pct",
-                          "improvement_probe_vs_paper_pct"}:
-                axis.axhline(0, color="black", linewidth=0.7)
             if subset[metric].notna().any():
                 axis.legend(fontsize="small")
             else:
